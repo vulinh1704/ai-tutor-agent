@@ -21,7 +21,7 @@ def test_defaults() -> None:
 
 @pytest.mark.parametrize(
     ("provider", "model"),
-    [("openai", "gpt-5.4-mini"), ("fake", "fake-tutor")],
+    [("openai", "gpt-5.4-mini"), ("anthropic", "claude-opus-5-5"), ("fake", "fake-tutor")],
 )
 def test_default_model_per_provider(
     monkeypatch: pytest.MonkeyPatch, provider: str, model: str
@@ -31,17 +31,18 @@ def test_default_model_per_provider(
 
 
 def test_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
-    monkeypatch.setenv("LLM_MODEL", "gpt-5.5")
-    monkeypatch.setenv("OPENAI_REASONING_EFFORT", "low")
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("LLM_MODEL", "claude-sonnet-5-5")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("ANTHROPIC_EFFORT", "low")
     monkeypatch.setenv("CHECKPOINTER", "sqlite")
     monkeypatch.setenv("SQLITE_PATH", "/tmp/tutor.sqlite")
 
     settings = _settings()
 
-    assert settings.llm_provider is LLMProvider.OPENAI
-    assert settings.resolved_model == "gpt-5.5"
-    assert settings.openai_reasoning_effort == "low"
+    assert settings.llm_provider is LLMProvider.ANTHROPIC
+    assert settings.resolved_model == "claude-sonnet-5-5"
+    assert settings.anthropic_effort == "low"
     assert settings.checkpointer is CheckpointerBackend.SQLITE
     assert settings.sqlite_path == Path("/tmp/tutor.sqlite")
 

@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+from typing import Any, Final
+
 from pydantic import SecretStr
 
 from ai_tutor_agent.config import LLMProvider, Settings
 from ai_tutor_agent.llm.base import ChatModel, LangChainChatModel
 from ai_tutor_agent.llm.fake import FakeChatModel
+
+logger = logging.getLogger(__name__)
+
+ANTHROPIC_SERVER_FALLBACK_BETA: Final = "server-side-fallback-2026-07-01"
 
 
 class ConfigurationError(ValueError):
@@ -17,7 +24,9 @@ def build_chat_model(settings: Settings) -> ChatModel:
     """Instantiate the chat model selected by ``LLM_PROVIDER``. Makes no network calls."""
     if settings.llm_provider is LLMProvider.FAKE:
         return FakeChatModel(model_name=settings.resolved_model)
-    return _build_openai(settings)
+    if settings.llm_provider is LLMProvider.OPENAI:
+        return _build_openai(settings)
+    return _build_anthropic(settings)
 
 
 def _require_key(key: SecretStr | None, env_var: str, provider: LLMProvider) -> SecretStr:
@@ -50,4 +59,42 @@ def _build_openai(settings: Settings) -> ChatModel:
         model_name=settings.resolved_model,
         # Native JSON-schema structured output with strict validation on OpenAI's side.
         structured_output_kwargs={"method": "json_schema", "strict": True},
+    )
+
+
+def _build_anthropic(settings: Settings) -> ChatModel:
+    from langchain_anthropic import ChatAnthropic  # lazy: keeps offline startup light
+
+    api_key = _require_key(settings.anthropic_api_key, "ANTHROPIC_API_KEY", LLMProvider.ANTHROPIC)
+    if settings.llm_temperature is not None:
+        logger.warning(
+            "LLM_TEMPERATURE is ignored for Anthropic: Claude's current API rejects sampling "
+            "parameters. Use ANTHROPIC_EFFORT to trade quality against cost instead."
+        )
+
+    betas: list[str] | None = None
+    model_kwargs: dict[str, Any] = {}
+    if settings.anthropic_server_fallback:
+        # If the model declines a request, Anthropic re-runs it server-side on its recommended
+        # fallback model. Models without fallback support simply run on their own.
+        betas = [ANTHROPIC_SERVER_FALLBACK_BETA]
+        model_kwargs["fallbacks"] = "default"
+
+    client = ChatAnthropic(
+        model=settings.resolved_model,
+        anthropic_api_key=api_key,
+        max_tokens=settings.llm_max_tokens,
+        default_request_timeout=settings.llm_timeout_seconds,
+        max_retries=settings.llm_max_retries,
+        reasoning_effort=settings.anthropic_effort,  # sent as output_config.effort
+        betas=betas,
+        model_kwargs=model_kwargs,
+    )
+    return LangChainChatModel(
+        client,
+        provider=LLMProvider.ANTHROPIC.value,
+        model_name=settings.resolved_model,
+        # Claude's native structured outputs (output_config.format) rather than a forced tool
+        # call: current Claude models reject forced tool_choice.
+        structured_output_kwargs={"method": "json_schema"},
     )
