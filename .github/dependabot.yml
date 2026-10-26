@@ -8,12 +8,20 @@ updates:
       python-dependencies:
         patterns: ["*"]
 
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    groups:
+      web-dependencies:
+        patterns: ["*"]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
 
   - package-ecosystem: docker
-    directory: /
+    directories: [/, /web]
     schedule:
       interval: monthly
