@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 
+from ai_tutor_agent.agent.graph import TutorGraph, build_graph
+from ai_tutor_agent.agent.hint_policy import HintPolicy
+from ai_tutor_agent.agent.service import TutorService
 from ai_tutor_agent.config import Settings
+from ai_tutor_agent.llm.fake import FakeChatModel
 from ai_tutor_agent.schemas import Assignment, Criterion, Rubric, SessionProfile
 
 
@@ -37,3 +42,18 @@ def profile(rubric: Rubric) -> SessionProfile:
             question="Solve for x: 3x + 5 = 20", rubric=rubric, reference_answer="x = 5"
         ),
     )
+
+
+@pytest.fixture
+def fake_llm() -> FakeChatModel:
+    return FakeChatModel()
+
+
+@pytest.fixture
+def graph(fake_llm: FakeChatModel) -> TutorGraph:
+    return build_graph(fake_llm, checkpointer=InMemorySaver(), policy=HintPolicy())
+
+
+@pytest.fixture
+def service(graph: TutorGraph, fake_llm: FakeChatModel) -> TutorService:
+    return TutorService(graph, fake_llm, HintPolicy())
