@@ -82,6 +82,34 @@ async def test_scripted_exceptions_are_raised() -> None:
         await llm.structured([HumanMessage("hi")], RouteDecision)
 
 
+async def test_stream_matches_complete_word_by_word(profile: SessionProfile) -> None:
+    messages = tutor_messages(profile, [HumanMessage("How do I start?")], hint_level=1)
+    llm = FakeChatModel()
+    chunks = [chunk async for chunk in llm.stream(messages)]
+    assert len(chunks) > 5
+    assert "".join(chunks) == await llm.complete(messages)
+    assert [c.kind for c in llm.calls] == ["stream", "complete"]
+
+
+async def test_stream_uses_scripted_replies_and_errors() -> None:
+    llm = FakeChatModel(replies=["Two words", LLMError("down")])
+    assert [c async for c in llm.stream([HumanMessage("hi")])] == ["Two ", "words"]
+    with pytest.raises(LLMError, match="down"):
+        [c async for c in llm.stream([HumanMessage("hi")])]
+
+
+async def test_stream_delay_paces_the_words(monkeypatch: pytest.MonkeyPatch) -> None:
+    pauses: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        pauses.append(seconds)
+
+    monkeypatch.setattr("ai_tutor_agent.llm.fake.asyncio.sleep", fake_sleep)
+    llm = FakeChatModel(replies=["one two three"], stream_delay=0.02)
+    assert "".join([c async for c in llm.stream([HumanMessage("hi")])]) == "one two three"
+    assert pauses == [0.02, 0.02, 0.02]
+
+
 async def test_unknown_schema_has_no_heuristic() -> None:
     class Unknown(BaseModel):
         value: int

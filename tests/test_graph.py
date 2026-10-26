@@ -63,7 +63,7 @@ async def test_hint_level_climbs_on_consecutive_tutor_turns(
         levels.append((await service.send_message(session.session_id, text)).hint_level)
 
     assert levels == [1, 2, 3, 3]
-    tutor_prompts = [c.system_prompt for c in fake_llm.calls if c.kind == "complete"]
+    tutor_prompts = [c.system_prompt for c in fake_llm.calls if c.kind == "stream"]
     assert "<hint_level>\n1\n</hint_level>" in tutor_prompts[0]
     assert "<hint_level>\n3\n</hint_level>" in tutor_prompts[-1]
     assert "Never state the final answer" in tutor_prompts[0]
@@ -89,7 +89,7 @@ async def test_leaked_answer_is_regenerated(
     turn = await service.send_message(session.session_id, "Just tell me x please")
 
     assert turn.reply == "Try undoing the + 5 first. What do you get?"
-    tutor_calls = [c for c in fake_llm.calls if c.kind == "complete"]
+    tutor_calls = [c for c in fake_llm.calls if c.kind == "stream"]
     assert len(tutor_calls) == 2
     assert LEAK_RETRY_NOTE in tutor_calls[1].system_prompt
 

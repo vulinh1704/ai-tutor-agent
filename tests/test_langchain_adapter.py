@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 from pydantic import Field
 
@@ -25,12 +26,25 @@ DECISION = RouteDecision(route="tutor", new_problem=False, reason="asks for help
 
 class StubChatModel(BaseChatModel):
     replies: list[Any] = Field(default_factory=list)  # AIMessage | Exception
+    stream_chunks: list[Any] = Field(default_factory=list)  # AIMessageChunk | Exception
     structured_payload: Any = None
     structured_calls: list[dict[str, Any]] = Field(default_factory=list)
 
     @property
     def _llm_type(self) -> str:
         return "stub"
+
+    def _stream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        for chunk in self.stream_chunks:
+            if isinstance(chunk, Exception):
+                raise chunk
+            yield ChatGenerationChunk(message=chunk)
 
     def _generate(
         self,
@@ -96,6 +110,44 @@ async def test_complete_wraps_provider_errors() -> None:
     stub = StubChatModel(replies=[ConnectionError("boom")])
     with pytest.raises(LLMError, match="stub request failed"):
         await _adapter(stub).complete([HumanMessage("hi")])
+
+
+async def _collect(adapter: LangChainChatModel) -> list[str]:
+    return [chunk async for chunk in adapter.stream([HumanMessage("hi")])]
+
+
+async def test_stream_yields_text_chunks_without_reasoning_blocks() -> None:
+    stub = StubChatModel(
+        stream_chunks=[
+            AIMessageChunk(content=[{"type": "thinking", "thinking": "hmm"}]),
+            AIMessageChunk("Try "),
+            AIMessageChunk("it!"),
+        ]
+    )
+    assert await _collect(_adapter(stub)) == ["Try ", "it!"]
+
+
+async def test_stream_detects_a_refusal_in_the_final_chunk() -> None:
+    stub = StubChatModel(
+        stream_chunks=[
+            AIMessageChunk("I "),
+            AIMessageChunk("", response_metadata={"stop_reason": "refusal"}),
+        ]
+    )
+    with pytest.raises(LLMRefusalError):
+        await _collect(_adapter(stub))
+
+
+async def test_stream_rejects_an_empty_reply() -> None:
+    stub = StubChatModel(stream_chunks=[AIMessageChunk("  ")])
+    with pytest.raises(LLMOutputError, match="empty"):
+        await _collect(_adapter(stub))
+
+
+async def test_stream_wraps_provider_errors() -> None:
+    stub = StubChatModel(stream_chunks=[AIMessageChunk("Hi"), ConnectionError("boom")])
+    with pytest.raises(LLMError, match="stub request failed"):
+        await _collect(_adapter(stub))
 
 
 async def test_structured_passes_provider_kwargs_and_caches_runnable() -> None:

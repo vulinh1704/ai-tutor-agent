@@ -8,14 +8,18 @@ It works in two layers:
    routing, a reply generator that follows the ``<hint_level>`` ladder and the ``<learner>``
    preferences (language, tone, scaffolding), and a keyword-coverage grader that reads the
    ``<rubric>`` and ``<student_answer>`` tags.
+
+:meth:`FakeChatModel.stream` yields the same replies word by word, optionally with a small
+delay so the offline web UI shows replies being typed.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections import deque
-from collections.abc import Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal, TypeVar, cast, get_args
 
@@ -40,7 +44,7 @@ T = TypeVar("T", bound=BaseModel)
 class FakeCall:
     """A recorded call, so tests can assert on the prompts the agent sent."""
 
-    kind: Literal["complete", "structured"]
+    kind: Literal["complete", "stream", "structured"]
     messages: list[BaseMessage]
     schema: type[BaseModel] | None = None
 
@@ -58,10 +62,12 @@ class FakeChatModel:
         replies: Iterable[str | Exception] = (),
         structured: Iterable[BaseModel | Exception] = (),
         model_name: str = "fake-tutor",
+        stream_delay: float = 0.0,
     ) -> None:
         self._replies: deque[str | Exception] = deque(replies)
         self._structured: deque[BaseModel | Exception] = deque(structured)
         self._model_name = model_name
+        self.stream_delay = stream_delay
         self.calls: list[FakeCall] = []
 
     @property
@@ -81,6 +87,13 @@ class FakeChatModel:
     async def complete(self, messages: Sequence[BaseMessage]) -> str:
         self.calls.append(FakeCall("complete", list(messages)))
         return self._next_reply(messages)
+
+    async def stream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[str]:
+        self.calls.append(FakeCall("stream", list(messages)))
+        for chunk in split_into_chunks(self._next_reply(messages)):
+            if self.stream_delay:
+                await asyncio.sleep(self.stream_delay)
+            yield chunk
 
     async def structured(self, messages: Sequence[BaseMessage], schema: type[T]) -> T:
         self.calls.append(FakeCall("structured", list(messages), schema))
@@ -105,6 +118,11 @@ class FakeChatModel:
                 raise reply
             return reply
         return heuristic_tutor_reply(messages)
+
+
+def split_into_chunks(text: str) -> list[str]:
+    """Split text into word-sized chunks (each keeps its trailing whitespace)."""
+    return re.findall(r"\s*\S+\s*", text) or [text]
 
 
 # --------------------------------------------------------------------------- heuristics

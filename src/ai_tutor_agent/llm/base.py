@@ -1,18 +1,18 @@
 """Provider-agnostic chat model interface used by the agent.
 
-The graph only depends on :class:`ChatModel`: two async methods, one for free text and one
-for Pydantic-validated structured output. Real providers are LangChain chat models wrapped by
-:class:`LangChainChatModel`; tests and the offline demo use
+The graph only depends on :class:`ChatModel`: async methods for free text (whole or streamed)
+and for Pydantic-validated structured output. Real providers are LangChain chat models wrapped
+by :class:`LangChainChatModel`; tests and the offline demo use
 :class:`~ai_tutor_agent.llm.fake.FakeChatModel`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, Protocol, TypeVar, runtime_checkable
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, BaseMessageChunk
 from langchain_core.runnables import Runnable
 from pydantic import BaseModel, ValidationError
 
@@ -43,6 +43,10 @@ class ChatModel(Protocol):
 
     async def complete(self, messages: Sequence[BaseMessage]) -> str:
         """Return the model's text reply."""
+        ...
+
+    def stream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[str]:
+        """Yield the model's text reply in chunks as it is generated."""
         ...
 
     async def structured(self, messages: Sequence[BaseMessage], schema: type[T]) -> T:
@@ -98,6 +102,24 @@ class LangChainChatModel:
         if not text:
             raise LLMOutputError("The model returned an empty reply.")
         return text
+
+    async def stream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[str]:
+        full: BaseMessageChunk | None = None
+        emitted = False
+        try:
+            async for chunk in self.client.astream(list(messages)):
+                full = chunk if full is None else full + chunk
+                text = chunk.text  # skips thinking/reasoning blocks
+                if text:
+                    emitted = emitted or bool(text.strip())
+                    yield text
+        except Exception as exc:
+            raise LLMError(f"{self.provider} request failed: {exc}") from exc
+        # Refusal signals arrive with the final chunks, so check the merged message.
+        if full is not None:
+            raise_if_refused(full)
+        if not emitted:
+            raise LLMOutputError("The model returned an empty reply.")
 
     async def structured(self, messages: Sequence[BaseMessage], schema: type[T]) -> T:
         runnable = self._structured_runnable(schema)
