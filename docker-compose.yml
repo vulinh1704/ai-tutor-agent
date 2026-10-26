@@ -1,0 +1,20 @@
+services:
+  api:
+    build: .
+    image: ai-tutor-agent:local
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Offline by default; set LLM_PROVIDER and an API key in .env for a real model.
+      LLM_PROVIDER: ${LLM_PROVIDER:-fake}
+      CHECKPOINTER: sqlite
+      SQLITE_PATH: /data/checkpoints.sqlite
+    volumes:
+      - tutor-data:/data
+    restart: unless-stopped
+
+volumes:
+  tutor-data:
