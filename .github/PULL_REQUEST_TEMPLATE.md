@@ -5,8 +5,9 @@
 ## How was it tested?
 
 - [ ] `make check` passes (ruff, mypy, pytest)
+- [ ] `make web-check` passes if `web/` changed (lint, typecheck, tests, build)
 - [ ] New or changed behaviour is covered by tests (using the fake model, no network)
-- [ ] Tried it end to end with `make demo` or `LLM_PROVIDER=fake make serve`
+- [ ] Tried it end to end with `make demo`, `LLM_PROVIDER=fake make serve` or the web UI
 
 ## Checklist
 
