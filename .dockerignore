@@ -9,5 +9,7 @@
 htmlcov
 data
 tests
+docs
+web
 **/__pycache__
 *.sqlite

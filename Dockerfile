@@ -15,12 +15,12 @@ WORKDIR /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --locked --no-install-project --no-dev --extra sqlite
+    uv sync --locked --no-install-project --no-dev --extra sqlite --extra mcp
 
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable --extra sqlite
+    uv sync --locked --no-dev --no-editable --extra sqlite --extra mcp
 
 # -------------------------------------------------------------- runtime stage
 FROM python:3.12-slim

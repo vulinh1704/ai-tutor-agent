@@ -12,8 +12,23 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-fake}
       CHECKPOINTER: sqlite
       SQLITE_PATH: /data/checkpoints.sqlite
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
     volumes:
       - tutor-data:/data
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      args:
+        # The browser calls the API directly: this is the API's address as the browser sees it.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    image: ai-tutor-web:local
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
