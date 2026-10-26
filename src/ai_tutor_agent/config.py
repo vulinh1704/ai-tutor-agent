@@ -16,6 +16,7 @@ class LLMProvider(StrEnum):
     """Which chat model backs the agent."""
 
     OPENAI = "openai"
+    ANTHROPIC = "anthropic"
     FAKE = "fake"
 
 
@@ -26,10 +27,12 @@ class CheckpointerBackend(StrEnum):
     SQLITE = "sqlite"
 
 
+AnthropicEffort = Literal["low", "medium", "high", "xhigh", "max"]
 OpenAIReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 
 DEFAULT_MODELS: Final[Mapping[LLMProvider, str]] = {
     LLMProvider.OPENAI: "gpt-5.4-mini",
+    LLMProvider.ANTHROPIC: "claude-opus-5-5",
     LLMProvider.FAKE: "fake-tutor",
 }
 
@@ -56,7 +59,7 @@ class Settings(BaseSettings):
         le=2.0,
         description=(
             "OpenAI only, and only for models that accept it (gpt-5 reasoning models need "
-            "OPENAI_REASONING_EFFORT=none)."
+            "OPENAI_REASONING_EFFORT=none). Claude's current API rejects sampling parameters."
         ),
     )
     llm_max_tokens: int = Field(default=16_000, ge=256)
@@ -66,6 +69,13 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr | None = None
     openai_base_url: str | None = None
     openai_reasoning_effort: OpenAIReasoningEffort | None = None
+
+    anthropic_api_key: SecretStr | None = None
+    anthropic_effort: AnthropicEffort | None = "medium"
+    anthropic_server_fallback: bool = Field(
+        default=True,
+        description="Opt into server-side fallback when a Claude model declines a request.",
+    )
 
     # --- Agent -------------------------------------------------------------
     max_hint_level: int = Field(default=3, ge=1, le=5)
