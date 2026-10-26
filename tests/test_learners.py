@@ -1,4 +1,4 @@
-"""Learner profiles, session summaries, progress and streaks."""
+"""Learner profiles, session summaries, progress and streaks (store and HTTP API)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 from langgraph.store.memory import InMemoryStore
 from pydantic import ValidationError
 
@@ -202,3 +203,95 @@ async def test_many_sessions_are_listed_across_pages() -> None:
     for i in range(105):
         await learners.add_session(learner.learner_id, f"s{i}", profile, f"2026-10-26T00:{i:03d}")
     assert len(await learners.list_sessions(learner.learner_id)) == 105
+
+
+# --------------------------------------------------------------------------- HTTP API
+
+
+def _create_learner(client: TestClient, **changes: Any) -> dict[str, Any]:
+    response = client.post("/learners", json={**LEARNER, **changes})
+    assert response.status_code == 201, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+def test_learner_api_round_trip(client: TestClient) -> None:
+    created = _create_learner(client)
+    learner_id = created["learner_id"]
+    assert created["display_name"] == "Linh"
+    assert created["preferences"]["language"] == "vi"
+
+    assert client.get(f"/learners/{learner_id}").json() == created
+
+    updated = client.put(
+        f"/learners/{learner_id}",
+        json={**LEARNER, "preferences": {"language": "en", "tone": "direct"}},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["preferences"] == {
+        "language": "en",
+        "tone": "direct",
+        "scaffolding": "standard",
+    }
+    assert updated.json()["created_at"] == created["created_at"]
+
+
+def test_unknown_learner_returns_404(client: TestClient) -> None:
+    for response in (
+        client.get("/learners/nope"),
+        client.put("/learners/nope", json=LEARNER),
+        client.get("/learners/nope/progress"),
+        client.get("/learners/nope/sessions"),
+        client.post("/sessions", json={"subject": "math", "level": "8", "learner_id": "nope"}),
+    ):
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Learner 'nope' not found."}
+
+
+def test_invalid_learner_is_rejected(client: TestClient) -> None:
+    assert client.post("/learners", json={**LEARNER, "timezone": "Nowhere/City"}).status_code == 422
+
+
+def test_sessions_and_progress_follow_chat_turns(client: TestClient) -> None:
+    learner_id = _create_learner(client, preferences={"scaffolding": "less"})["learner_id"]
+    session = client.post(
+        "/sessions",
+        json={
+            "subject": "algebra",
+            "level": "grade 8",
+            "learner_id": learner_id,
+            "assignment": {
+                "question": "Solve for x: 3x + 5 = 20",
+                "reference_answer": "x = 5",
+                "skills": ["linear-equations"],
+                "rubric": {
+                    "criteria": [
+                        {
+                            "id": "answer",
+                            "description": "States the solution x = 5",
+                            "max_points": 2,
+                        }
+                    ]
+                },
+            },
+        },
+    ).json()
+    assert session["learner_id"] == learner_id
+    assert session["max_hint_level"] == 2  # "less" scaffolding stops one rung lower
+    assert session["assignment"]["skills"] == ["linear-equations"]
+
+    sid = session["session_id"]
+    client.post(f"/sessions/{sid}/messages", json={"content": "How do I start?"})
+    graded = client.post(f"/sessions/{sid}/messages", json={"content": "x = 5", "intent": "submit"})
+    assert graded.json()["route"] == "grader"
+
+    assert client.get(f"/sessions/{sid}").json()["last_grade"]["percentage"] == 100.0
+    sessions = client.get(f"/learners/{learner_id}/sessions").json()
+    assert [(s["session_id"], s["turns"], s["best_percentage"]) for s in sessions] == [
+        (sid, 2, 100.0)
+    ]
+    progress = client.get(f"/learners/{learner_id}/progress").json()
+    assert progress["sessions"] == 1
+    assert progress["graded_attempts"] == 1
+    assert progress["average_score"] == 100.0
+    assert progress["current_streak"] == 1

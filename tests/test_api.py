@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from ai_tutor_agent import __version__
 from ai_tutor_agent.api.app import create_app
+from ai_tutor_agent.api.errors import describe_error
 from ai_tutor_agent.config import Settings
 from ai_tutor_agent.llm.base import LLMError, LLMRefusalError
 from ai_tutor_agent.llm.factory import ConfigurationError
@@ -168,6 +169,10 @@ def test_invalid_grading_maps_to_502(client: TestClient, fake_llm: FakeChatModel
     response = client.post("/grade", json=GRADE_REQUEST)
     assert response.status_code == 502
     assert "invalid grading" in response.json()["detail"]
+
+
+def test_unexpected_errors_are_not_leaked() -> None:
+    assert describe_error(RuntimeError("db password is hunter2")) == (500, "Internal server error.")
 
 
 def test_app_fails_fast_on_missing_api_key() -> None:

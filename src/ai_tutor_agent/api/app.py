@@ -10,12 +10,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from ai_tutor_agent import __version__
-from ai_tutor_agent.agent.checkpointer import open_checkpointer
-from ai_tutor_agent.agent.graph import build_graph
-from ai_tutor_agent.agent.hint_policy import HintPolicy
-from ai_tutor_agent.agent.service import TutorService
+from ai_tutor_agent.agent.service import open_service
 from ai_tutor_agent.api.errors import register_exception_handlers
 from ai_tutor_agent.api.routes import router
 from ai_tutor_agent.config import Settings, get_settings
@@ -29,19 +27,12 @@ def create_app(settings: Settings | None = None, *, llm: ChatModel | None = None
     """Build the app. ``llm`` overrides the configured provider (handy in tests)."""
     settings = settings or get_settings()
     chat_model = llm or build_chat_model(settings)  # fail fast on bad configuration
-    policy = HintPolicy(max_level=settings.max_hint_level)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        async with open_checkpointer(settings) as checkpointer:
-            graph = build_graph(
-                chat_model,
-                checkpointer=checkpointer,
-                policy=policy,
-                history_window=settings.history_window,
-            )
+        async with open_service(settings, chat_model) as service:
             app.state.settings = settings
-            app.state.service = TutorService(graph, chat_model, policy)
+            app.state.service = service
             logger.info(
                 "AI tutor ready: provider=%s model=%s checkpointer=%s",
                 chat_model.provider,
@@ -55,6 +46,12 @@ def create_app(settings: Settings | None = None, *, llm: ChatModel | None = None
         version=__version__,
         summary="Socratic tutoring and rubric-based grading on FastAPI + LangGraph.",
         lifespan=lifespan,
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_methods=["GET", "POST", "PUT"],
+        allow_headers=["Content-Type"],
     )
     app.include_router(router)
     register_exception_handlers(app)
