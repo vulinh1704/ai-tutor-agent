@@ -34,6 +34,9 @@ dependencies = [
 [project.optional-dependencies]
 sqlite = ["langgraph-checkpoint-sqlite>=3.1,<4"]
 
+[project.scripts]
+ai-tutor = "ai_tutor_agent.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/vulinh1704/ai-tutor-agent"
 Issues = "https://github.com/vulinh1704/ai-tutor-agent/issues"
