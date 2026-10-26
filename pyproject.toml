@@ -1,6 +1,6 @@
 [project]
 name = "ai-tutor-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "A production-ready starter for AI tutoring agents: FastAPI + LangGraph, with Socratic hints, rubric-based grading and session memory."
 readme = "README.md"
 license = "MIT"
