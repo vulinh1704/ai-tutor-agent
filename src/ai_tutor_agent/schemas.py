@@ -3,14 +3,41 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Literal
+from typing import Annotated, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 TutorMode = Literal["homework", "explain"]
 """``homework``: Socratic hints only, never the final answer. ``explain``: full walkthroughs."""
 
 Route = Literal["tutor", "grader", "clarify"]
+
+Intent = Literal["auto", "submit"]
+"""``auto``: the router decides. ``submit``: the message is an answer to grade."""
+
+Language = Literal["en", "vi"]
+"""Language of the tutor's replies (and of the web UI)."""
+
+Tone = Literal["gentle", "direct"]
+Scaffolding = Literal["less", "standard", "more"]
+
+ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
+
+
+def _known_timezone(name: str) -> str:
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"unknown time zone {name!r}") from exc
+    return name
 
 
 class Criterion(BaseModel):
@@ -51,6 +78,12 @@ class Assignment(BaseModel):
         max_length=4000,
         description="Never shown to the student; used for grading and answer-leak detection.",
     )
+    skills: list[ShortText] = Field(
+        default_factory=list,
+        max_length=8,
+        examples=[["linear-equations"]],
+        description="Optional skill tags, recorded with every graded attempt.",
+    )
 
 
 class SessionProfile(BaseModel):
@@ -60,10 +93,63 @@ class SessionProfile(BaseModel):
     level: str = Field(min_length=1, max_length=80, examples=["grade 8"])
     mode: TutorMode = "homework"
     assignment: Assignment | None = None
+    learner_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Personalise replies with this learner's profile and track their progress.",
+    )
 
     @property
     def rubric(self) -> Rubric | None:
         return self.assignment.rubric if self.assignment else None
+
+
+class TutorPreferences(BaseModel):
+    """How the tutor talks to a learner. Fed into every tutor and grader prompt."""
+
+    language: Language = "en"
+    tone: Tone = Field(
+        default="gentle",
+        description="gentle: warm and encouraging; direct: brief and to the point.",
+    )
+    scaffolding: Scaffolding = Field(
+        default="standard",
+        description="more: hints start one rung higher; less: the ladder stops one rung lower.",
+    )
+
+
+class Appearance(BaseModel):
+    """Display preferences for clients such as the web UI. Never sent to the model."""
+
+    avatar: str = Field(default="owl", pattern=r"^[a-z0-9-]{1,24}$")
+    accent: str = Field(default="teal", pattern=r"^[a-z0-9-]{1,24}$")
+    font_scale: Literal["normal", "large", "x-large"] = "normal"
+
+
+class LearnerProfile(BaseModel):
+    """A learner's long-term profile, shared by all of their sessions."""
+
+    display_name: ShortText = Field(examples=["Linh"])
+    level: str = Field(min_length=1, max_length=80, examples=["grade 8"])
+    subjects: list[ShortText] = Field(default_factory=list, max_length=8, examples=[["math"]])
+    goal: str | None = Field(default=None, max_length=280, examples=["Feel confident in algebra"])
+    preferences: TutorPreferences = Field(default_factory=TutorPreferences)
+    appearance: Appearance = Field(default_factory=Appearance)
+    timezone: Annotated[str, AfterValidator(_known_timezone)] = Field(
+        default="UTC", max_length=64, examples=["Asia/Ho_Chi_Minh"]
+    )
+
+
+class LearnerContext(BaseModel):
+    """The part of a learner profile the prompts see (name and goal are untrusted input)."""
+
+    name: str
+    goal: str | None = None
+    preferences: TutorPreferences = Field(default_factory=TutorPreferences)
+
+    @classmethod
+    def from_profile(cls, profile: LearnerProfile) -> LearnerContext:
+        return cls(name=profile.display_name, goal=profile.goal, preferences=profile.preferences)
 
 
 class CriterionScore(BaseModel):
