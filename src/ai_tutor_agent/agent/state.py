@@ -7,19 +7,23 @@ from typing import Annotated, Any, NotRequired, TypedDict
 from langchain_core.messages import AnyMessage
 from langgraph.graph import add_messages
 
-from ai_tutor_agent.schemas import Route
+from ai_tutor_agent.schemas import Intent, Route
 
 
 class TutorInput(TypedDict):
     """What callers may write into the graph.
 
-    A chat turn passes only ``messages``. Creating a session seeds ``profile`` and
-    ``created_at`` once, with ``aupdate_state`` on a fresh thread (which is applied as input).
+    A chat turn passes ``messages`` plus the turn's ``intent`` and the learner's current
+    preferences (``learner``), so a profile change applies from the next turn on. Creating a
+    session seeds ``profile`` and ``created_at`` once, with ``aupdate_state`` on a fresh thread
+    (which is applied as input).
     """
 
     messages: NotRequired[Annotated[list[AnyMessage], add_messages]]
     profile: NotRequired[dict[str, Any]]
     created_at: NotRequired[str]
+    intent: NotRequired[Intent]
+    learner: NotRequired[dict[str, Any] | None]
 
 
 class TutorState(TypedDict):
@@ -33,6 +37,9 @@ class TutorState(TypedDict):
     profile: dict[str, Any]
     """``SessionProfile.model_dump(mode="json")``."""
     created_at: NotRequired[str]
+    intent: NotRequired[Intent]
+    learner: NotRequired[dict[str, Any] | None]
+    """``LearnerContext.model_dump(mode="json")`` for the current turn, if the session has one."""
     route: NotRequired[Route]
     route_reason: NotRequired[str]
     new_problem: NotRequired[bool]
