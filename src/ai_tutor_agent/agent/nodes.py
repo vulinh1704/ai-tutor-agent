@@ -18,7 +18,13 @@ from ai_tutor_agent.prompts import (
     router_messages,
     tutor_messages,
 )
-from ai_tutor_agent.schemas import Route, RouteDecision, SessionProfile
+from ai_tutor_agent.schemas import (
+    Language,
+    LearnerContext,
+    Route,
+    RouteDecision,
+    SessionProfile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +40,23 @@ class TutorNodes:
     async def router(self, state: TutorState) -> dict[str, Any]:
         """Ask the model where the latest message should go, then apply guardrails in code."""
         profile = SessionProfile.model_validate(state["profile"])
-        history = recent_history(state["messages"], self.history_window)
-        try:
-            decision = await self.llm.structured(router_messages(profile, history), RouteDecision)
-        except LLMOutputError as exc:
-            logger.warning("Router output unusable, defaulting to the tutor: %s", exc)
+        learner = _learner(state)
+        if state.get("intent") == "submit":
+            # The client said this is an answer to grade: no need to ask the model.
             decision = RouteDecision(
-                route="tutor", new_problem=False, reason="Router fallback after invalid output."
+                route="grader", new_problem=False, reason="The student submitted an answer."
             )
+        else:
+            history = recent_history(state["messages"], self.history_window)
+            try:
+                decision = await self.llm.structured(
+                    router_messages(profile, history, learner), RouteDecision
+                )
+            except LLMOutputError as exc:
+                logger.warning("Router output unusable, defaulting to the tutor: %s", exc)
+                decision = RouteDecision(
+                    route="tutor", new_problem=False, reason="Router fallback after invalid output."
+                )
 
         route, reason = decision.route, decision.reason
         if route == "grader" and profile.rubric is None:
@@ -51,30 +66,37 @@ class TutorNodes:
     async def tutor(self, state: TutorState) -> dict[str, Any]:
         """Reply with a hint at the current ladder level (or a full explanation in explain mode)."""
         profile = SessionProfile.model_validate(state["profile"])
+        learner = _learner(state)
         history = recent_history(state["messages"], self.history_window)
 
         if profile.mode == "explain":
-            reply = await self.llm.complete(tutor_messages(profile, history, hint_level=0))
-            return {"messages": [AIMessage(reply)], "hint_level": 0}
+            explanation = await self.llm.complete(
+                tutor_messages(profile, history, hint_level=0, learner=learner)
+            )
+            return {"messages": [AIMessage(explanation)], "hint_level": 0}
 
+        scaffolding = learner.preferences.scaffolding if learner else "standard"
         level = self.policy.next_level(
-            state.get("hint_level", 0), new_problem=state.get("new_problem", False)
+            state.get("hint_level", 0),
+            new_problem=state.get("new_problem", False),
+            scaffolding=scaffolding,
         )
         reference = profile.assignment.reference_answer if profile.assignment else None
-        reply = await self.llm.complete(tutor_messages(profile, history, level))
+        reply = await self.llm.complete(tutor_messages(profile, history, level, learner=learner))
         if self.policy.leaks_answer(reply, reference):
             logger.info("Tutor draft revealed the answer; regenerating once")
             reply = await self.llm.complete(
-                tutor_messages(profile, history, level, retry_note=LEAK_RETRY_NOTE)
+                tutor_messages(profile, history, level, retry_note=LEAK_RETRY_NOTE, learner=learner)
             )
             if self.policy.leaks_answer(reply, reference):
                 logger.warning("Tutor still revealed the answer; using the fallback hint")
-                reply = self.policy.fallback_reply(level)
+                reply = self.policy.fallback_reply(level, _language(learner))
         return {"messages": [AIMessage(reply)], "hint_level": level}
 
     async def grader(self, state: TutorState) -> dict[str, Any]:
         """Grade the student's latest message against the session rubric."""
         profile = SessionProfile.model_validate(state["profile"])
+        learner = _learner(state)
         assignment = profile.assignment
         if assignment is None or assignment.rubric is None:  # the router guarantees this
             raise RuntimeError("The grader node requires a session rubric.")
@@ -91,9 +113,10 @@ class TutorNodes:
             level=profile.level,
             reference_answer=assignment.reference_answer,
             policy=self.policy,
+            learner=learner,
         )
         return {
-            "messages": [AIMessage(format_grade(grade))],
+            "messages": [AIMessage(format_grade(grade, _language(learner)))],
             "last_grade": grade.model_dump(mode="json"),
             "hint_level": 0,  # a fresh attempt restarts the hint ladder
         }
@@ -101,7 +124,16 @@ class TutorNodes:
     async def clarify(self, state: TutorState) -> dict[str, Any]:
         """Ask a clarifying question. Deterministic: no model call needed."""
         profile = SessionProfile.model_validate(state["profile"])
-        return {"messages": [AIMessage(clarify_reply(profile))]}
+        return {"messages": [AIMessage(clarify_reply(profile, _language(_learner(state))))]}
+
+
+def _learner(state: TutorState) -> LearnerContext | None:
+    raw = state.get("learner")
+    return LearnerContext.model_validate(raw) if raw else None
+
+
+def _language(learner: LearnerContext | None) -> Language:
+    return learner.preferences.language if learner else "en"
 
 
 def select_route(state: TutorState) -> Route:
