@@ -59,3 +59,12 @@ def test_rejects_unknown_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LLM_PROVIDER", "unknown")
     with pytest.raises(ValidationError):
         _settings()
+
+
+def test_web_ui_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _settings().cors_origins == ["http://localhost:3000", "http://127.0.0.1:3000"]
+    monkeypatch.setenv("CORS_ORIGINS", "https://tutor.example.com, http://localhost:3001,")
+    monkeypatch.setenv("FAKE_STREAM_DELAY_MS", "0")
+    settings = _settings()
+    assert settings.cors_origins == ["https://tutor.example.com", "http://localhost:3001"]
+    assert settings.fake_stream_delay_ms == 0

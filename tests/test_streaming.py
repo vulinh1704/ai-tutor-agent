@@ -1,10 +1,12 @@
-"""Streamed chat turns: the event sequence, the leak guard and errors."""
+"""Streamed chat turns: the event sequence, the leak guard, errors and the SSE endpoint."""
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 
 from ai_tutor_agent.agent.events import DoneEvent, TokenEvent, TurnEvent
 from ai_tutor_agent.agent.hint_policy import HintPolicy
@@ -163,3 +165,80 @@ async def test_turn_completes_when_the_listener_leaves(
     assert first.type == "route"
     saved = await service.get_session(session.session_id)
     assert [m.type for m in saved.messages] == ["human", "ai"]
+
+
+# --------------------------------------------------------------------------- SSE endpoint
+
+
+def _sse(client: TestClient, path: str, payload: dict[str, Any]) -> list[tuple[str, Any]]:
+    with client.stream("POST", path, json=payload) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        body = "".join(response.iter_text())
+    events = []
+    for block in body.split("\n\n"):
+        fields = dict(
+            line.split(": ", 1) for line in block.splitlines() if line and not line.startswith(":")
+        )
+        if fields:
+            events.append((fields["event"], json.loads(fields["data"])))
+    return events
+
+
+def _session(client: TestClient, profile: SessionProfile) -> str:
+    response = client.post("/sessions", json=profile.model_dump(mode="json"))
+    session_id: str = response.json()["session_id"]
+    return session_id
+
+
+def test_sse_endpoint_streams_a_turn(client: TestClient, profile: SessionProfile) -> None:
+    session_id = _session(client, profile)
+
+    events = _sse(client, f"/sessions/{session_id}/messages/stream", {"content": "How do I start?"})
+
+    names = [name for name, _ in events]
+    assert names[:2] == ["route", "hint"]
+    assert names[-1] == "done"
+    assert set(names[2:-1]) == {"token"}
+    done = events[-1][1]
+    assert (
+        "".join(data["text"] for name, data in events if name == "token").strip() == done["reply"]
+    )
+    # The streamed turn is saved exactly like a regular one.
+    history = client.get(f"/sessions/{session_id}").json()["messages"]
+    assert history[-1] == {"role": "tutor", "content": done["reply"]}
+
+
+def test_sse_endpoint_reports_failures_as_error_events(
+    client: TestClient, fake_llm: FakeChatModel, profile: SessionProfile
+) -> None:
+    session_id = _session(client, profile)
+    fake_llm.queue_reply(LLMError("upstream timeout"))
+
+    events = _sse(client, f"/sessions/{session_id}/messages/stream", {"content": "How do I start?"})
+
+    assert events[-1] == (
+        "error",
+        {"type": "error", "status": 502, "detail": "The language model provider failed. Retry."},
+    )
+
+
+def test_sse_endpoint_validates_before_streaming(
+    client: TestClient, profile: SessionProfile
+) -> None:
+    missing = client.post("/sessions/nope/messages/stream", json={"content": "hi"})
+    assert missing.status_code == 404
+    assert missing.json() == {"detail": "Session 'nope' not found."}
+
+    session_id = _session(client, profile)
+    empty = client.post(f"/sessions/{session_id}/messages/stream", json={"content": ""})
+    assert empty.status_code == 422
+
+
+def test_cors_allows_the_web_ui(client: TestClient) -> None:
+    response = client.options(
+        "/learners",
+        headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "POST"},
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"

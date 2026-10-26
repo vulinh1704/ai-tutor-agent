@@ -6,10 +6,10 @@ from collections.abc import Mapping
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Final, Literal
+from typing import Annotated, Any, Final, Literal
 
-from pydantic import Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class LLMProvider(StrEnum):
@@ -77,6 +77,13 @@ class Settings(BaseSettings):
         description="Opt into server-side fallback when a Claude model declines a request.",
     )
 
+    fake_stream_delay_ms: int = Field(
+        default=25,
+        ge=0,
+        le=1000,
+        description="Pause between streamed words of the offline model, so replies look typed.",
+    )
+
     # --- Agent -------------------------------------------------------------
     max_hint_level: int = Field(default=3, ge=1, le=5)
     history_window: int = Field(default=20, ge=2, le=200)
@@ -84,6 +91,19 @@ class Settings(BaseSettings):
     # --- Persistence -------------------------------------------------------
     checkpointer: CheckpointerBackend = CheckpointerBackend.MEMORY
     sqlite_path: Path = Path("data/checkpoints.sqlite")
+
+    # --- HTTP API ----------------------------------------------------------
+    cors_origins: Annotated[list[str], NoDecode] = Field(
+        default=["http://localhost:3000", "http://127.0.0.1:3000"],
+        description="Comma-separated browser origins allowed to call the API (the web UI).",
+    )
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_origins(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
 
     @property
     def resolved_model(self) -> str:

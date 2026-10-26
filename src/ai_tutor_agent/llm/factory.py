@@ -23,7 +23,9 @@ class ConfigurationError(ValueError):
 def build_chat_model(settings: Settings) -> ChatModel:
     """Instantiate the chat model selected by ``LLM_PROVIDER``. Makes no network calls."""
     if settings.llm_provider is LLMProvider.FAKE:
-        return FakeChatModel(model_name=settings.resolved_model)
+        return FakeChatModel(
+            model_name=settings.resolved_model, stream_delay=settings.fake_stream_delay_ms / 1000
+        )
     if settings.llm_provider is LLMProvider.OPENAI:
         return _build_openai(settings)
     return _build_anthropic(settings)
