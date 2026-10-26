@@ -10,19 +10,24 @@ from __future__ import annotations
 import asyncio
 import uuid
 import weakref
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.messages import AnyMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.store.memory import InMemoryStore
 
+from ai_tutor_agent.agent.checkpointer import open_checkpointer, open_store
+from ai_tutor_agent.agent.events import DoneEvent, TurnEvent
 from ai_tutor_agent.agent.grading import grade_answer
-from ai_tutor_agent.agent.graph import TutorGraph
+from ai_tutor_agent.agent.graph import TutorGraph, build_graph
 from ai_tutor_agent.agent.hint_policy import HintPolicy
 from ai_tutor_agent.agent.learners import LearnerStore
 from ai_tutor_agent.agent.state import TutorInput
+from ai_tutor_agent.config import Settings
 from ai_tutor_agent.llm.base import ChatModel
 from ai_tutor_agent.schemas import (
     GradeResult,
@@ -63,9 +68,9 @@ def _thread(session_id: str) -> RunnableConfig:
 
 
 class TutorService:
-    """Sessions, chat turns, grading and learner progress.
+    """Sessions, chat turns (whole or streamed), grading and learner progress.
 
-    Used by the HTTP API and the CLI demo.
+    Used by the HTTP API, the MCP server and the CLI demo.
     """
 
     def __init__(
@@ -81,6 +86,8 @@ class TutorService:
         self.learners = learners or LearnerStore(InMemoryStore())
         # One lock per active session: turns on the same session are applied in order.
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+        # Streamed turns run in their own tasks, so a dropped connection never cuts a turn short.
+        self._turns: set[asyncio.Task[None]] = set()
 
     # ------------------------------------------------------------------ sessions
 
@@ -126,6 +133,64 @@ class TutorService:
             turn = _turn_result(session_id, state)
             await self._record(snapshot.profile, turn)
         return turn
+
+    async def stream_message(
+        self, session_id: str, content: str, *, intent: Intent = "auto"
+    ) -> AsyncIterator[TurnEvent]:
+        """Run a chat turn and yield its events as they happen, ending with ``done``.
+
+        The turn runs in its own task: if the consumer stops listening, the turn still
+        completes and is saved, exactly like a non-streaming turn.
+        """
+        await self.get_session(session_id)  # fail fast for unknown sessions
+        queue: asyncio.Queue[TurnEvent | Exception | None] = asyncio.Queue()
+        task = asyncio.create_task(self._streamed_turn(session_id, content, intent, queue))
+        self._turns.add(task)
+        task.add_done_callback(self._turns.discard)
+        while (item := await queue.get()) is not None:
+            if isinstance(item, Exception):
+                raise item
+            yield item
+
+    async def aclose(self) -> None:
+        """Wait for streamed turns that are still running (call before closing storage)."""
+        if self._turns:
+            await asyncio.gather(*self._turns, return_exceptions=True)
+
+    async def _streamed_turn(
+        self,
+        session_id: str,
+        content: str,
+        intent: Intent,
+        queue: asyncio.Queue[TurnEvent | Exception | None],
+    ) -> None:
+        try:
+            async with self._lock(session_id):
+                snapshot = await self.get_session(session_id)
+                turn_input = await self._turn_input(snapshot.profile, content, intent)
+                final: dict[str, Any] = {}
+                async for mode, chunk in self.graph.astream(
+                    turn_input, _thread(session_id), stream_mode=["custom", "values"]
+                ):
+                    if mode == "custom":
+                        queue.put_nowait(cast(TurnEvent, chunk))
+                    else:
+                        final = cast(dict[str, Any], chunk)
+                turn = _turn_result(session_id, final)
+                await self._record(snapshot.profile, turn)
+            queue.put_nowait(
+                DoneEvent(
+                    session_id=session_id,
+                    route=turn.route,
+                    reply=turn.reply,
+                    hint_level=turn.hint_level,
+                    grade=turn.grade,
+                )
+            )
+        except Exception as exc:
+            queue.put_nowait(exc)
+        finally:
+            queue.put_nowait(None)
 
     # ------------------------------------------------------------------ grading
 
@@ -201,3 +266,18 @@ def _turn_result(session_id: str, state: dict[str, Any]) -> TurnResult:
         hint_level=state.get("hint_level", 0),
         grade=GradeResult.model_validate(last_grade) if route == "grader" and last_grade else None,
     )
+
+
+@asynccontextmanager
+async def open_service(settings: Settings, llm: ChatModel) -> AsyncIterator[TutorService]:
+    """Open the configured storage, build the graph and yield a ready :class:`TutorService`."""
+    policy = HintPolicy(max_level=settings.max_hint_level)
+    async with open_checkpointer(settings) as checkpointer, open_store(settings) as store:
+        graph = build_graph(
+            llm, checkpointer=checkpointer, policy=policy, history_window=settings.history_window
+        )
+        service = TutorService(graph, llm, policy, LearnerStore(store))
+        try:
+            yield service
+        finally:
+            await service.aclose()
