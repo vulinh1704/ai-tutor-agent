@@ -36,6 +36,47 @@ def test_demo_runs_offline(capsys: pytest.CaptureFixture[str]) -> None:
     assert '"score": 7' in out
 
 
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["mcp"], ("stdio", {})),
+        (
+            ["mcp", "--transport", "streamable-http", "--port", "9001"],
+            ("streamable-http", {"host": "127.0.0.1", "port": 9001}),
+        ),
+    ],
+)
+def test_mcp_command_runs_the_server(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], expected: tuple[str, dict[str, Any]]
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setenv("LLM_PROVIDER", "fake")
+    monkeypatch.setattr(
+        "mcp.server.MCPServer.run",
+        lambda self, transport, **kwargs: calls.append((transport, kwargs)),
+    )
+    assert main(argv) == 0
+    assert calls == [expected]
+
+
+def test_mcp_command_refuses_to_start_without_a_key(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.chdir("/")  # no .env file here
+    assert main(["mcp"]) == 2
+    assert "ANTHROPIC_API_KEY is required" in capsys.readouterr().err
+
+
+def test_mcp_command_explains_the_missing_extra(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "fake")
+    monkeypatch.setitem(sys.modules, "ai_tutor_agent.mcp_server", None)  # import fails
+    assert main(["mcp"]) == 2
+    assert "needs the 'mcp' extra" in capsys.readouterr().err
+
+
 def test_version(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exc:
         main(["--version"])
