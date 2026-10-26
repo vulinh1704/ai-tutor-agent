@@ -43,6 +43,25 @@ jobs:
       - run: uv sync --locked --all-extras
       - run: uv run pytest --cov --cov-report=term-missing
 
+  web:
+    name: Web UI (lint, typecheck, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
   docker:
     name: Docker build & smoke test
     runs-on: ubuntu-latest
@@ -64,6 +83,23 @@ jobs:
           for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/health && break; sleep 1; done
           curl -fsS -X POST http://127.0.0.1:8000/grade \
             -H 'Content-Type: application/json' -d @examples/grade-request.json
+          SID=$(curl -fsS -X POST http://127.0.0.1:8000/sessions \
+            -H 'Content-Type: application/json' -d @examples/create-session.json | jq -r .session_id)
+          curl -fsS -N -X POST "http://127.0.0.1:8000/sessions/$SID/messages/stream" \
+            -H 'Content-Type: application/json' -d '{"content": "How do I start?"}' | grep -q '^event: done'
       - name: Container logs
         if: always()
         run: docker logs tutor
+      - uses: docker/build-push-action@v7
+        with:
+          context: web
+          load: true
+          push: false
+          tags: ai-tutor-web:ci
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+      - name: Web image smoke test
+        run: |
+          docker run -d --name web -p 3000:3000 ai-tutor-web:ci
+          for _ in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:3000 && break; sleep 1; done
+          curl -fsS http://127.0.0.1:3000 | grep -q '<html'
