@@ -1,0 +1,19 @@
+{
+  "subject": "algebra",
+  "level": "grade 8",
+  "mode": "homework",
+  "assignment": {
+    "question": "Solve for x: 3x + 5 = 20",
+    "reference_answer": "x = 5",
+    "rubric": {
+      "criteria": [
+        {
+          "id": "method",
+          "description": "Subtracts 5 from both sides, then divides both sides by 3",
+          "max_points": 3
+        },
+        { "id": "answer", "description": "States the solution x = 5", "max_points": 2 }
+      ]
+    }
+  }
+}

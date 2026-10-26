@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
+from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import InMemorySaver
 
 from ai_tutor_agent.agent.graph import TutorGraph, build_graph
 from ai_tutor_agent.agent.hint_policy import HintPolicy
 from ai_tutor_agent.agent.service import TutorService
+from ai_tutor_agent.api.app import create_app
 from ai_tutor_agent.config import Settings
 from ai_tutor_agent.llm.fake import FakeChatModel
 from ai_tutor_agent.schemas import Assignment, Criterion, Rubric, SessionProfile
@@ -57,3 +61,14 @@ def graph(fake_llm: FakeChatModel) -> TutorGraph:
 @pytest.fixture
 def service(graph: TutorGraph, fake_llm: FakeChatModel) -> TutorService:
     return TutorService(graph, fake_llm, HintPolicy())
+
+
+@pytest.fixture
+def settings() -> Settings:
+    return Settings(_env_file=None, llm_provider="fake")
+
+
+@pytest.fixture
+def client(settings: Settings, fake_llm: FakeChatModel) -> Iterator[TestClient]:
+    with TestClient(create_app(settings, llm=fake_llm)) as test_client:
+        yield test_client
