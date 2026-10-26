@@ -10,6 +10,7 @@ import pytest
 from ai_tutor_agent import __version__
 from ai_tutor_agent.cli import main
 from ai_tutor_agent.config import get_settings
+from ai_tutor_agent.demo import summarise_events
 
 
 @pytest.fixture(autouse=True)
@@ -34,6 +35,15 @@ def test_demo_runs_offline(capsys: pytest.CaptureFixture[str]) -> None:
     assert "[tutor, hint level 3]" in out
     assert "Score: 5/5 (100%)" in out
     assert '"score": 7' in out
+    # Personalised part: Vietnamese, direct tone, more scaffolding, streamed.
+    assert "Mình cùng chọn hướng giải nhé." in out
+    assert "Điểm: 5/5 (100%)" in out
+    assert "(streamed as: route -> hint -> token x" in out
+    assert "Progress: 1 session, 1 graded attempt, average score 100%, streak 1 day" in out
+
+
+def test_summarise_events() -> None:
+    assert summarise_events(["route", "token", "token", "done"]) == "route -> token x2 -> done"
 
 
 @pytest.mark.parametrize(
