@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---------------------------------------------------------------- build stage
-FROM python:3.12-slim AS builder
+FROM python:3.15-slim AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
 
@@ -23,7 +23,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable --extra sqlite
 
 # -------------------------------------------------------------- runtime stage
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 RUN useradd --create-home --uid 10001 tutor \
     && mkdir -p /data \
